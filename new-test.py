@@ -1,76 +1,73 @@
 import os
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFLoader
+import streamlit as st
+
+from langchain.chat_models import ChatOpenAI
+from langchain.chains import ConversationalRetrievalChain
+from langchain.vectorstores import Chroma
+from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.prompts import ChatPromptTemplate
-from langchain_community.chat_models import ChatOpenAI
-from langchain.chains import RetrievalQA
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.memory import ConversationBufferMemory
 
-# Load environment variables from a .env file (if it exists in the same directory)
+# Load .env for API key
 load_dotenv()
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
-# Get the OpenAI API key from the environment variables
-openai_key = os.environ.get("OPENAI_API_KEY")
+# Initialize Streamlit app
+st.set_page_config(page_title="PDF Chat with Memory")
+st.title("📄 Chat with your PDF (Memory Included)")
 
-# Set PDF path manually (you can modify this as needed)
-pdf_path = r"C:\Users\lenovo\Desktop\LangChain\Monopoly_Rules.pdf"
+# Upload PDF
+pdf_file = st.file_uploader("Upload your PDF", type="pdf")
 
-# Load and process the document
-def process_document(pdf_path):
-    loader = PyPDFLoader(pdf_path)
+# Initialize chat history
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if pdf_file is not None:
+    # Save PDF temporarily
+    with open("temp.pdf", "wb") as f:
+        f.write(pdf_file.read())
+
+    # Load and split PDF
+    loader = PyPDFLoader("temp.pdf")
     documents = loader.load()
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    docs = splitter.split_documents(documents)
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    chunks = text_splitter.split_documents(documents)
-
+    # Embeddings + Chroma vectorstore
     embeddings = OpenAIEmbeddings()
-    vector_store = FAISS.from_documents(chunks, embeddings)
+    vectordb = Chroma.from_documents(docs, embeddings, persist_directory="./chroma_db")
+    vectordb.persist()
 
-    return vector_store
+    # Memory for chat history
+    memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
-vector_store = process_document(pdf_path)
+    # LLM model
+    llm = ChatOpenAI(temperature=0, openai_api_key=openai_api_key)
 
-# Initialize QA system
-def create_qa_system(vector_store, openai_key):
-    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=openai_key)
-
-    prompt_template = ChatPromptTemplate.from_template(
-        """Use the following context to answer the question:
-        {context}
-
-        Question: {question}
-        Answer in detail:"""
-    )
-
-    return RetrievalQA.from_chain_type(
+    # Conversational chain
+    qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
-        chain_type="stuff",
-        retriever=vector_store.as_retriever(search_kwargs={"k": 4}),
-        chain_type_kwargs={"prompt": prompt_template}
+        retriever=vectordb.as_retriever(search_kwargs={"k": 3}),
+        memory=memory,
+        verbose=True
     )
 
-# Only proceed if API key is available
-if openai_key:
-    qa_system = create_qa_system(vector_store, openai_key)
+    # Chat input
+    user_question = st.text_input("Ask a question about the PDF:")
 
-    # Example usage
-    while True:
-        question = input("Ask a question about the document (or 'exit' to quit): ")
-        if question.lower() == "exit":
-            break
+    if user_question:
+        response = qa_chain.run(user_question)
+        st.write("### Answer:")
+        st.write(response)
 
-        result = qa_system({"query": question})
-        print("\nAnswer:\n", result["result"])
+        # Update history
+        st.session_state.chat_history.append((user_question, response))
 
-        print("\nRelevant Sections:\n")
-        for i, doc in enumerate(result["source_documents"]):
-            print(f"Section {i+1}:")
-            print(doc.page_content)
-            print("-" * 40)
-else:
-    print("OpenAI API key not found. Please set it in your environment variables or .env file.")
+        st.write("---")
+        st.write("### Chat History")
+        for i, (q, a) in enumerate(st.session_state.chat_history):
+            st.write(f"**Q{i+1}:** {q}")
+            st.write(f"**A{i+1}:** {a}")
