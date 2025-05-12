@@ -37,7 +37,9 @@ if pdf_file is not None:
     docs = splitter.split_documents(documents)
 
     # Embeddings + Chroma vectorstore
-    embeddings = OpenAIEmbeddings()
+    embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+
+
     vectordb = Chroma.from_documents(docs, embeddings, persist_directory="./chroma_db")
     vectordb.persist()
 
