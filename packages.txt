@@ -1,2 +1,6 @@
 swig
-build-essential
+gcc
+make
+automake
+autoconf
+libtool
